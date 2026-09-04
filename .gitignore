@@ -1,0 +1,5 @@
+/bin/
+/keydirectory
+*.out
+.env
+.idea/
