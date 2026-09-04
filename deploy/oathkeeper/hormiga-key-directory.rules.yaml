@@ -1,0 +1,41 @@
+# Oathkeeper access rules for hormiga-key-directory (ADR-006 pattern).
+#
+# The service trusts X-User-Id. Oathkeeper MUST strip any client-supplied trust
+# header and inject it from the authenticated Kratos session, and the service MUST
+# be unreachable except via this proxy. Adjust upstream/url to your topology.
+
+- id: hormiga-key-directory:public-health
+  match:
+    url: "http://<edge-host>/key-directory/<(healthz|readyz)>"
+    methods: [GET]
+  authenticators:
+    - handler: anonymous
+  authorizer:
+    handler: allow
+  mutators:
+    - handler: noop
+  upstream:
+    url: "http://hormiga-key-directory:8092"
+    strip_path: /key-directory
+
+- id: hormiga-key-directory:v1
+  match:
+    url: "http://<edge-host>/key-directory/v1/<.*>"
+    methods: [GET, POST]
+  authenticators:
+    # Authenticate the Kratos session; unauthenticated → 401.
+    - handler: cookie_session
+  authorizer:
+    handler: allow
+  mutators:
+    # Strip client-supplied trust headers and inject X-User-Id / X-User-Email
+    # from the authenticated identity (the header mutator config lives centrally;
+    # this rule just selects it). See ADR-006.
+    - handler: header
+      config:
+        headers:
+          X-User-Id: "{{ print .Subject }}"
+          X-User-Email: "{{ print .Extra.identity.traits.email }}"
+  upstream:
+    url: "http://hormiga-key-directory:8092"
+    strip_path: /key-directory
