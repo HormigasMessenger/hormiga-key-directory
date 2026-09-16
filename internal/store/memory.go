@@ -61,6 +61,12 @@ func (m *Memory) Publish(_ context.Context, userID string, b BundleUpload) error
 			d.opks[o.ID] = append([]byte(nil), o.Pub...)
 		}
 	}
+	// Single-device model (v1): publishing one device retires the user's others (mirrors Postgres).
+	for id := range m.devices[userID] {
+		if id != b.DeviceID {
+			delete(m.devices[userID], id)
+		}
+	}
 	return nil
 }
 

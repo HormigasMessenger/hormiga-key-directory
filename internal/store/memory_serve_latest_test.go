@@ -48,7 +48,7 @@ func TestMemory_FetchAll_ServesOnlyLatestDevice(t *testing.T) {
 		t.Fatalf("want the current identity key, got %v", bundles[0].IdentityKey)
 	}
 
-	// Re-publishing an OLDER device makes it current again (highest seq wins).
+	// Re-publishing a device makes it the sole current one again (replace-on-publish retires the rest).
 	if err := m.Publish(ctx, "u1", up("old-a", 0xA1)); err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +60,8 @@ func TestMemory_FetchAll_ServesOnlyLatestDevice(t *testing.T) {
 		t.Fatalf("want re-published device to become current, got %+v", bundles)
 	}
 
-	// A specific-device fetch still reaches any device by id (unchanged behavior).
-	if _, err := m.FetchAndConsume(ctx, "u1", "old-b"); err != nil {
-		t.Fatalf("specific-device fetch should still work: %v", err)
+	// Replace-on-publish: the retired devices are GONE — a specific-device fetch for one no longer resolves.
+	if _, err := m.FetchAndConsume(ctx, "u1", "current"); err != ErrNotFound {
+		t.Fatalf("want retired device to be ErrNotFound, got %v", err)
 	}
 }

@@ -62,6 +62,17 @@ func (p *Postgres) Publish(ctx context.Context, userID string, b BundleUpload) e
 	if err := insertOPKs(ctx, tx, userID, b.DeviceID, b.OneTimePreKeys); err != nil {
 		return err
 	}
+
+	// Single-device model (v1): a user has exactly ONE live device — publishing one RETIRES any others.
+	// A re-provision (cleared storage / a different device) would otherwise leave dead rows that the
+	// directory keeps serving, and a peer verifying the safety number could hash the wrong (stale) key.
+	// Retire them here so the invariant "one device per user" holds at the source of truth (the FK
+	// cascade drops the retired devices' signed/one-time prekeys). The just-published device is kept.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM e2e_identity WHERE user_id = $1 AND device_id <> $2`,
+		userID, b.DeviceID); err != nil {
+		return fmt.Errorf("retire other devices: %w", err)
+	}
 	return tx.Commit(ctx)
 }
 
