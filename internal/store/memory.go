@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"sort"
 	"sync"
 )
 
@@ -13,6 +12,7 @@ import (
 type Memory struct {
 	mu      sync.Mutex
 	devices map[string]map[string]*memDevice // userID -> deviceID -> device
+	nextSeq int64                            // monotonic publish counter → "latest device" ordering
 }
 
 type memDevice struct {
@@ -20,6 +20,7 @@ type memDevice struct {
 	spk         SignedPreKey
 	hasSPK      bool
 	opks        map[int32][]byte // un-consumed only; consumed ones are removed
+	seq         int64            // publish order; the highest seq for a user is the current device
 }
 
 func NewMemory() *Memory {
@@ -53,6 +54,8 @@ func (m *Memory) Publish(_ context.Context, userID string, b BundleUpload) error
 	d.identityKey = append([]byte(nil), b.IdentityKey...)
 	d.spk = SignedPreKey{ID: b.SignedPreKey.ID, Pub: append([]byte(nil), b.SignedPreKey.Pub...), Sig: append([]byte(nil), b.SignedPreKey.Sig...)}
 	d.hasSPK = true
+	m.nextSeq++
+	d.seq = m.nextSeq // this (re)publish makes the device the user's current one
 	for _, o := range b.OneTimePreKeys {
 		if _, ok := d.opks[o.ID]; !ok {
 			d.opks[o.ID] = append([]byte(nil), o.Pub...)
@@ -85,10 +88,19 @@ func (m *Memory) FetchAndConsume(_ context.Context, userID, deviceID string) ([]
 	}
 	var deviceIDs []string
 	if deviceID == "" {
-		for id := range byDev {
-			deviceIDs = append(deviceIDs, id)
+		// v1 single-device: serve only the latest-published device (highest seq). Mirrors the
+		// Postgres store — a peer must not receive dead devices left by past re-provisions, or
+		// the safety number is computed against a stale identity and never matches.
+		var latest string
+		var maxSeq int64 = -1
+		for id, d := range byDev {
+			if d.seq > maxSeq {
+				maxSeq, latest = d.seq, id
+			}
 		}
-		sort.Strings(deviceIDs)
+		if latest != "" {
+			deviceIDs = []string{latest}
+		}
 	} else {
 		if _, ok := byDev[deviceID]; !ok {
 			return nil, ErrNotFound

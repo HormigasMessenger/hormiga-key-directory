@@ -129,8 +129,17 @@ func (p *Postgres) FetchAndConsume(ctx context.Context, userID, deviceID string)
 	// Which devices to serve.
 	var rows pgx.Rows
 	if deviceID == "" {
+		// v1 is single-device: a user's current device is the most-recently-published one.
+		// Re-provisioning (cleared storage / new browser) publishes a NEW device_id without
+		// retiring the old rows, so without this the directory would hand a peer EVERY dead
+		// device it ever saw. A peer can't tell which is live, and the safety number — hashed
+		// per identity key — would then be computed against a stale device and never match.
+		// Serve only the latest identity so both sides converge on the user's current key.
 		rows, err = tx.Query(ctx,
-			`SELECT device_id, identity_key_pub FROM e2e_identity WHERE user_id = $1 ORDER BY device_id`,
+			`SELECT device_id, identity_key_pub FROM e2e_identity
+			 WHERE user_id = $1
+			 ORDER BY updated_at DESC, device_id DESC
+			 LIMIT 1`,
 			userID)
 	} else {
 		rows, err = tx.Query(ctx,
