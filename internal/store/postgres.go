@@ -4,10 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// maxUnconsumedOPK caps the un-consumed one-time-prekey pool per device. A well-behaved client tops up to
+// ~20; this bounds a buggy/abusive one and, with the consumed-row purge on replenish, keeps per-device
+// storage bounded regardless of how many sessions the device has started.
+const maxUnconsumedOPK = 200
 
 // Postgres is the production directory store.
 type Postgres struct {
@@ -92,7 +98,26 @@ func (p *Postgres) AddOneTimePreKeys(ctx context.Context, userID, deviceID strin
 	if !exists {
 		return 0, ErrNotFound
 	}
-	if err := insertOPKs(ctx, tx, userID, deviceID, opks); err != nil {
+	// Purge spent one-time prekeys — consumed rows are never served and, with monotonic client ids, can
+	// never be reissued, so keeping them only grows storage without bound as the device starts sessions.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM e2e_one_time_prekey WHERE user_id = $1 AND device_id = $2 AND consumed_at IS NOT NULL`,
+		userID, deviceID); err != nil {
+		return 0, fmt.Errorf("purge consumed prekeys: %w", err)
+	}
+	// Cap the un-consumed pool: a well-behaved client tops up to ~20, so a device already at the ceiling
+	// is a buggy/abusive replenish — skip inserting rather than let the pool grow without limit.
+	var cur int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM e2e_one_time_prekey
+		 WHERE user_id = $1 AND device_id = $2 AND consumed_at IS NULL`,
+		userID, deviceID).Scan(&cur); err != nil {
+		return 0, err
+	}
+	if cur >= maxUnconsumedOPK {
+		slog.Warn("one-time-prekey pool at cap; skipping replenish",
+			"user", userID, "device", deviceID, "cap", maxUnconsumedOPK)
+	} else if err := insertOPKs(ctx, tx, userID, deviceID, opks); err != nil {
 		return 0, err
 	}
 	var remaining int
@@ -122,10 +147,20 @@ func insertOPKs(ctx context.Context, tx pgx.Tx, userID, deviceID string, opks []
 	}
 	br := tx.SendBatch(ctx, batch)
 	defer br.Close()
+	inserted := 0
 	for range opks {
-		if _, err := br.Exec(); err != nil {
+		tag, err := br.Exec()
+		if err != nil {
 			return fmt.Errorf("insert one-time prekey: %w", err)
 		}
+		inserted += int(tag.RowsAffected())
+	}
+	// A dropped insert means the client reused an opk_id (ON CONFLICT DO NOTHING kept the old public key).
+	// The invariant is "opk_id unique + monotonic per device forever" — a violation means the client's
+	// private for that id no longer matches the served public, so X3DH under it will fail. Never silent.
+	if inserted < len(opks) {
+		slog.Warn("one-time-prekey id reuse: some publics dropped",
+			"user", userID, "device", deviceID, "requested", len(opks), "inserted", inserted)
 	}
 	return nil
 }
@@ -242,6 +277,19 @@ func (p *Postgres) FetchAndConsume(ctx context.Context, userID, deviceID string)
 }
 
 func (p *Postgres) CountOneTimePreKeys(ctx context.Context, userID, deviceID string) (int, error) {
+	// Contract: an UNKNOWN user+device is ErrNotFound (not 0). The client's self-heal republish keys off
+	// this 404 to detect a device the directory never registered (e.g. a first publish that failed while
+	// the directory was unreachable). Returning 0 here — as a bare count would for a missing device —
+	// silently disables that recovery path in prod. Mirror the Memory store.
+	var exists bool
+	if err := p.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM e2e_identity WHERE user_id = $1 AND device_id = $2)`,
+		userID, deviceID).Scan(&exists); err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, ErrNotFound
+	}
 	var n int
 	err := p.pool.QueryRow(ctx,
 		`SELECT count(*) FROM e2e_one_time_prekey

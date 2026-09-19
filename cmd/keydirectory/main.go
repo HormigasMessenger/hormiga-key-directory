@@ -21,6 +21,7 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(log) // so the store layer can surface anomalies (e.g. one-time-prekey id reuse)
 
 	cfg, err := config.FromEnv()
 	if err != nil {

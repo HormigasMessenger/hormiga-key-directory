@@ -47,20 +47,24 @@ type DeviceBundle struct {
 
 // Store is the directory contract. Implementations: Postgres (prod) and Memory (dev/e2e).
 type Store interface {
-	// Publish registers/updates a device's identity + signed prekey and appends
-	// one-time prekeys to its pool. Bound to userID (the authenticated caller).
+	// Publish registers/updates a device's identity + signed prekey and appends one-time prekeys to its
+	// pool. Bound to userID (the authenticated caller). Single-device (v1): publishing a device RETIRES
+	// the user's other devices.
 	Publish(ctx context.Context, userID string, b BundleUpload) error
 
-	// AddOneTimePreKeys appends to a device's pool (replenish) and returns the
-	// number of un-consumed prekeys remaining. ErrNotFound if the device has no identity.
+	// AddOneTimePreKeys appends to a device's pool (replenish) and returns the number of un-consumed
+	// prekeys remaining. ErrNotFound if the device has no identity. Callers MUST use monotonic, never-
+	// reused opk_ids: a reused id is dropped (the published public is kept) and logged, never overwritten.
+	// Spent prekeys are purged and the un-consumed pool is capped, so per-device storage stays bounded.
 	AddOneTimePreKeys(ctx context.Context, userID, deviceID string, opks []PreKey) (remaining int, err error)
 
-	// FetchAndConsume returns the bundles for a peer, consuming one one-time prekey
-	// per device atomically. deviceID == "" fetches every device of the user.
-	// ErrNotFound if the user (or the named device) has no usable bundle.
+	// FetchAndConsume returns the bundles for a peer, consuming one one-time prekey per device atomically.
+	// deviceID == "" fetches the user's CURRENT (single) device. ErrNotFound if the user (or the named
+	// device) has no usable bundle. NOTE: not idempotent — a GET here consumes a prekey; never blind-retry.
 	FetchAndConsume(ctx context.Context, userID, deviceID string) ([]DeviceBundle, error)
 
-	// CountOneTimePreKeys reports the un-consumed pool size for a device (low-water check).
+	// CountOneTimePreKeys reports the un-consumed pool size for a device (low-water check). An UNKNOWN
+	// user+device is ErrNotFound (not 0) — the client's self-heal republish keys off that.
 	CountOneTimePreKeys(ctx context.Context, userID, deviceID string) (int, error)
 
 	// Ping checks backend liveness.

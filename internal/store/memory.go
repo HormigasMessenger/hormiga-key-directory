@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 )
 
@@ -77,10 +78,21 @@ func (m *Memory) AddOneTimePreKeys(_ context.Context, userID, deviceID string, o
 	if d == nil {
 		return 0, ErrNotFound
 	}
+	if len(d.opks) >= maxUnconsumedOPK { // cap the pool (mirrors Postgres)
+		slog.Warn("one-time-prekey pool at cap; skipping replenish",
+			"user", userID, "device", deviceID, "cap", maxUnconsumedOPK)
+		return len(d.opks), nil
+	}
+	inserted := 0
 	for _, o := range opks {
 		if _, ok := d.opks[o.ID]; !ok {
 			d.opks[o.ID] = append([]byte(nil), o.Pub...)
+			inserted++
 		}
+	}
+	if inserted < len(opks) { // reused id → dropped public (see Postgres insertOPKs / C1)
+		slog.Warn("one-time-prekey id reuse: some publics dropped",
+			"user", userID, "device", deviceID, "requested", len(opks), "inserted", inserted)
 	}
 	return len(d.opks), nil
 }
