@@ -49,6 +49,27 @@ func TestMemory_ReplenishReusedIdDropped(t *testing.T) {
 	}
 }
 
+// C5: an owner revokes a device — it's gone, and a fetch no longer resolves it.
+func TestMemory_DeleteDevice(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemory()
+	if err := m.DeleteDevice(ctx, "u", "ghost"); err != ErrNotFound {
+		t.Fatalf("unknown device: want ErrNotFound, got %v", err)
+	}
+	if err := m.Publish(ctx, "u", idBundle("d", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.DeleteDevice(ctx, "u", "d"); err != nil {
+		t.Fatalf("delete existing: %v", err)
+	}
+	if _, err := m.FetchAndConsume(ctx, "u", ""); err != ErrNotFound {
+		t.Fatalf("after revoke, fetch: want ErrNotFound, got %v", err)
+	}
+	if err := m.DeleteDevice(ctx, "u", "d"); err != ErrNotFound {
+		t.Fatalf("double delete: want ErrNotFound, got %v", err)
+	}
+}
+
 // Pool cap: the un-consumed pool never grows past the ceiling, however much a client sends.
 func TestMemory_PoolCapped(t *testing.T) {
 	ctx := context.Background()

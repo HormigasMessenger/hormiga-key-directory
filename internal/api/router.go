@@ -11,8 +11,9 @@ import (
 
 // Router wires the directory endpoints. Health checks are unauthenticated; every
 // /v1 route sits behind the Oathkeeper-injected identity header.
-func Router(s store.Store, h *Handlers, userHeader string, log *slog.Logger) http.Handler {
+func Router(s store.Store, h *Handlers, userHeader string, log *slog.Logger, fetchRatePerMin, fetchBurst int) http.Handler {
 	mux := http.NewServeMux()
+	fetchRL := newRateLimiter(fetchRatePerMin, fetchBurst)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -31,10 +32,12 @@ func Router(s store.Store, h *Handlers, userHeader string, log *slog.Logger) htt
 	mux.Handle("POST /v1/keys", authed(http.HandlerFunc(h.Publish)))
 	mux.Handle("POST /v1/keys/one-time", authed(http.HandlerFunc(h.Replenish)))
 	mux.Handle("GET /v1/keys/self/count", authed(http.HandlerFunc(h.SelfCount)))
+	// Device revocation — the owner retires one of their own devices (userId is the authenticated caller).
+	mux.Handle("DELETE /v1/keys/self/{deviceId}", authed(http.HandlerFunc(h.DeleteSelfDevice)))
 
-	// KEY_FETCH (a peer's public bundle; consumes one one-time prekey per device).
-	mux.Handle("GET /v1/keys/{userId}", authed(http.HandlerFunc(h.FetchUser)))
-	mux.Handle("GET /v1/keys/{userId}/{deviceId}", authed(http.HandlerFunc(h.FetchDevice)))
+	// KEY_FETCH (a peer's public bundle; consumes one one-time prekey per device) — rate-limited per caller.
+	mux.Handle("GET /v1/keys/{userId}", authed(rateLimit(fetchRL, http.HandlerFunc(h.FetchUser))))
+	mux.Handle("GET /v1/keys/{userId}/{deviceId}", authed(rateLimit(fetchRL, http.HandlerFunc(h.FetchDevice))))
 
 	return logging(log, mux)
 }

@@ -15,6 +15,8 @@ type Config struct {
 	MaxOPKPerRequest int    // cap on one-time prekeys accepted per publish/replenish
 	MaxKeyBytes      int    // per-key size sanity cap
 	AutoMigrate      bool
+	FetchRatePerMin  int    // per-caller KEY_FETCH budget (fetch consumes a peer's one-time prekey); 0 disables
+	FetchBurst       int    // per-caller burst allowance for KEY_FETCH
 }
 
 func FromEnv() (Config, error) {
@@ -26,6 +28,8 @@ func FromEnv() (Config, error) {
 		MaxOPKPerRequest: getInt("KD_MAX_OPK_PER_REQUEST", 200),
 		MaxKeyBytes:      getInt("KD_MAX_KEY_BYTES", 1024),
 		AutoMigrate:      getBool("KD_AUTO_MIGRATE", true),
+		FetchRatePerMin:  getInt("KD_FETCH_RATE_PER_MIN", 120),
+		FetchBurst:       getInt("KD_FETCH_BURST", 30),
 	}
 	if !c.DevStub && c.DatabaseURL == "" {
 		return c, fmt.Errorf("KD_DATABASE_URL is required (or set KD_DEV_STUB=true for the in-memory store)")

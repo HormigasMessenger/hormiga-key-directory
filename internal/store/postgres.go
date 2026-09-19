@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -46,6 +47,17 @@ func (p *Postgres) Publish(ctx context.Context, userID string, b BundleUpload) e
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Audit: an existing device re-publishing a DIFFERENT identity key silently shifts peers' safety
+	// numbers (§D7). Normal clients never rotate identity (self-heal republishes the same key), so this
+	// is a notable event worth a trail. Best-effort — a read error here must not block the publish.
+	var prev []byte
+	if err := tx.QueryRow(ctx,
+		`SELECT identity_key_pub FROM e2e_identity WHERE user_id = $1 AND device_id = $2`,
+		userID, b.DeviceID).Scan(&prev); err == nil && !bytes.Equal(prev, b.IdentityKey) {
+		slog.Warn("device identity key changed on publish (peers' safety numbers will shift)",
+			"user", userID, "device", b.DeviceID)
+	}
 
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO e2e_identity (user_id, device_id, identity_key_pub)
@@ -296,4 +308,18 @@ func (p *Postgres) CountOneTimePreKeys(ctx context.Context, userID, deviceID str
 		 WHERE user_id = $1 AND device_id = $2 AND consumed_at IS NULL`,
 		userID, deviceID).Scan(&n)
 	return n, err
+}
+
+func (p *Postgres) DeleteDevice(ctx context.Context, userID, deviceID string) error {
+	// The FK cascade drops the device's signed + one-time prekeys with the identity row.
+	tag, err := p.pool.Exec(ctx,
+		`DELETE FROM e2e_identity WHERE user_id = $1 AND device_id = $2`,
+		userID, deviceID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

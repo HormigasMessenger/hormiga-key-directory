@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"sync"
@@ -51,6 +52,10 @@ func (m *Memory) dev(userID, deviceID string, create bool) *memDevice {
 func (m *Memory) Publish(_ context.Context, userID string, b BundleUpload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if existing := m.dev(userID, b.DeviceID, false); existing != nil && existing.hasSPK && !bytes.Equal(existing.identityKey, b.IdentityKey) {
+		slog.Warn("device identity key changed on publish (peers' safety numbers will shift)",
+			"user", userID, "device", b.DeviceID)
+	}
 	d := m.dev(userID, b.DeviceID, true)
 	d.identityKey = append([]byte(nil), b.IdentityKey...)
 	d.spk = SignedPreKey{ID: b.SignedPreKey.ID, Pub: append([]byte(nil), b.SignedPreKey.Pub...), Sig: append([]byte(nil), b.SignedPreKey.Sig...)}
@@ -158,6 +163,20 @@ func (m *Memory) CountOneTimePreKeys(_ context.Context, userID, deviceID string)
 		return 0, ErrNotFound
 	}
 	return len(d.opks), nil
+}
+
+func (m *Memory) DeleteDevice(_ context.Context, userID, deviceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	byDev := m.devices[userID]
+	if byDev == nil {
+		return ErrNotFound
+	}
+	if _, ok := byDev[deviceID]; !ok {
+		return ErrNotFound
+	}
+	delete(byDev, deviceID)
+	return nil
 }
 
 func lowestKey(pool map[int32][]byte) (int32, bool) {

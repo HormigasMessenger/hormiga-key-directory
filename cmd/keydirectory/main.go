@@ -53,7 +53,7 @@ func main() {
 	h := &api.Handlers{Store: st, MaxOPK: cfg.MaxOPKPerRequest, MaxKeyBytes: cfg.MaxKeyBytes}
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           api.Router(st, h, cfg.UserHeader, log),
+		Handler:           api.Router(st, h, cfg.UserHeader, log, cfg.FetchRatePerMin, cfg.FetchBurst),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

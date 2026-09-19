@@ -67,6 +67,10 @@ type Store interface {
 	// user+device is ErrNotFound (not 0) — the client's self-heal republish keys off that.
 	CountOneTimePreKeys(ctx context.Context, userID, deviceID string) (int, error)
 
+	// DeleteDevice revokes a device: removes its identity + signed/one-time prekeys. Scoped to userID so a
+	// caller only ever deletes its own device. ErrNotFound if the device doesn't exist.
+	DeleteDevice(ctx context.Context, userID, deviceID string) error
+
 	// Ping checks backend liveness.
 	Ping(ctx context.Context) error
 

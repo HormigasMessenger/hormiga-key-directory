@@ -16,7 +16,7 @@ import (
 func testRouter() http.Handler {
 	s := store.NewMemory()
 	h := &Handlers{Store: s, MaxOPK: 200, MaxKeyBytes: 1024}
-	return Router(s, h, "X-User-Id", slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil))) //nolint
+	return Router(s, h, "X-User-Id", slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)), 0, 0) //nolint (rate-limit off for these tests)
 }
 
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }

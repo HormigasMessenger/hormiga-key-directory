@@ -21,7 +21,7 @@
 - id: hormiga-key-directory:v1
   match:
     url: "http://<edge-host>/key-directory/v1/<.*>"
-    methods: [GET, POST]
+    methods: [GET, POST, DELETE]  # DELETE: device revocation (DELETE /v1/keys/self/{deviceId})
   authenticators:
     # Authenticate the Kratos session; unauthenticated → 401.
     - handler: cookie_session

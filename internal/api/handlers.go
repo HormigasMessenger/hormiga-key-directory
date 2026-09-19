@@ -143,6 +143,23 @@ func (h *Handlers) SelfCount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, CountResponse{DeviceID: deviceID, OneTimePreKeysRemaining: n})
 }
 
+// DeleteSelfDevice revokes one of the CALLER'S OWN devices — removes its identity + signed/one-time
+// prekeys. deviceId is a path param; userId is the authenticated caller, so a client can only delete its
+// own device. Used to retire a lost/compromised device. 204 on success, 404 if the device is unknown.
+func (h *Handlers) DeleteSelfDevice(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserID(r.Context())
+	deviceID := r.PathValue("deviceId")
+	if deviceID == "" {
+		writeErr(w, http.StatusBadRequest, "deviceId is required")
+		return
+	}
+	if err := h.Store.DeleteDevice(r.Context(), userID, deviceID); err != nil {
+		h.writeStoreErr(w, err, "delete failed")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ---- helpers ----
 
 func (h *Handlers) decodeKey(w http.ResponseWriter, field, b64 string) ([]byte, bool) {
