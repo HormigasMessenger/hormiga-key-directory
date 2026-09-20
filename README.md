@@ -12,12 +12,22 @@ stack: Go; zero runtime coupling to the messenger).
 
 ## What it is (and is NOT)
 
+Scope note: this is the session-authed **bootstrap service for establishing a secure
+connection to a peer** — it hands an authenticated client everything needed to reach a
+peer securely: the peer's **public E2EE keys** (X3DH) and short-lived **TURN credentials**
+for the media relay. Both are client→peer call/chat setup; nothing here decrypts media or
+holds a user's private key.
+
 - **IS:** a directory of each device's public identity key, signed prekey (+signature),
   and a pool of one-time prekeys; hands a peer a prekey *bundle* to start an offline X3DH
-  session, consuming one one-time prekey atomically.
-- **IS NOT:** a crypto engine. It never holds a private key, ratchet state, session key
-  or plaintext. It does not relay messages — the encrypted `E2E_MSG` rides the messenger's
-  existing opaque delivery path, never this service.
+  session, consuming one one-time prekey atomically. **Also** mints ephemeral TURN
+  credentials (coturn `use-auth-secret` / TURN REST API) so no static TURN password is ever
+  baked into the client — see `/v1/turn/credentials`.
+- **IS NOT:** a crypto engine for user data. It never holds a private key, ratchet state,
+  session key or plaintext, and never decrypts media. It does not relay messages — the
+  encrypted `E2E_MSG` rides the messenger's opaque delivery path, never this service. (It
+  does hold ONE server-side shared secret — the coturn `static-auth-secret` — used only to
+  HMAC short-lived TURN tokens; that is not user key material.)
 
 ## Trust model (read this)
 

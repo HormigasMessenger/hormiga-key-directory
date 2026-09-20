@@ -34,6 +34,8 @@ func Router(s store.Store, h *Handlers, userHeader string, log *slog.Logger, fet
 	mux.Handle("GET /v1/keys/self/count", authed(http.HandlerFunc(h.SelfCount)))
 	// Device revocation — the owner retires one of their own devices (userId is the authenticated caller).
 	mux.Handle("DELETE /v1/keys/self/{deviceId}", authed(http.HandlerFunc(h.DeleteSelfDevice)))
+	// Short-lived TURN credentials for the caller (coturn use-auth-secret). Stateless mint, not OPK-bound.
+	mux.Handle("GET /v1/turn/credentials", authed(http.HandlerFunc(h.TurnCredentials)))
 
 	// KEY_FETCH (a peer's public bundle; consumes one one-time prekey per device) — rate-limited per caller.
 	mux.Handle("GET /v1/keys/{userId}", authed(rateLimit(fetchRL, http.HandlerFunc(h.FetchUser))))

@@ -2,10 +2,16 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1" //nolint:gosec // HMAC-SHA1 is mandated by the coturn use-auth-secret / TURN REST API contract
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"hash"
 	"net/http"
+	"strconv"
+	"sync"
+	"time"
 
 	"github.com/hormigasmessenger/hormiga-key-directory/internal/auth"
 	"github.com/hormigasmessenger/hormiga-key-directory/internal/store"
@@ -16,6 +22,15 @@ type Handlers struct {
 	Store       store.Store
 	MaxOPK      int
 	MaxKeyBytes int
+
+	// Ephemeral TURN credentials (coturn use-auth-secret / TURN REST API). TurnSecret MUST equal coturn's
+	// static-auth-secret; empty disables the endpoint. The HMAC is pooled — the mint path is stateless
+	// (no DB, no locks) so it parallelizes freely under load.
+	TurnSecret  []byte
+	TurnURIs    []string
+	TurnTTL     int
+	turnMACPool sync.Pool
+	turnMACOnce sync.Once
 }
 
 // Publish handles KEY_PUBLISH: register a device's identity + signed prekey and
@@ -158,6 +173,37 @@ func (h *Handlers) DeleteSelfDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// TurnCredentials mints SHORT-LIVED TURN credentials for the caller (coturn use-auth-secret / TURN REST
+// API): username = "<expiry>:<userId>", credential = base64(HMAC-SHA1(secret, username)). coturn recomputes
+// the same HMAC from its static-auth-secret and enforces the embedded expiry — so no static password is ever
+// baked into the client and a leaked credential is useless within minutes. Stateless (no DB, no locks) →
+// scales with request concurrency; the HMAC is pooled. 503 when TURN isn't configured (feature off).
+func (h *Handlers) TurnCredentials(w http.ResponseWriter, r *http.Request) {
+	if len(h.TurnSecret) == 0 {
+		writeErr(w, http.StatusServiceUnavailable, "turn credentials not configured")
+		return
+	}
+	userID := auth.UserID(r.Context())
+	expiry := time.Now().Unix() + int64(h.TurnTTL)
+	username := strconv.FormatInt(expiry, 10) + ":" + userID
+
+	h.turnMACOnce.Do(func() {
+		h.turnMACPool.New = func() any { return hmac.New(sha1.New, h.TurnSecret) }
+	})
+	mac := h.turnMACPool.Get().(hash.Hash)
+	mac.Reset()
+	_, _ = mac.Write([]byte(username))
+	credential := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	h.turnMACPool.Put(mac)
+
+	writeJSON(w, http.StatusOK, TurnCredentialsResponse{
+		Username:   username,
+		Credential: credential,
+		TTL:        h.TurnTTL,
+		URIs:       h.TurnURIs,
+	})
 }
 
 // ---- helpers ----

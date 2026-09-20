@@ -50,7 +50,10 @@ func main() {
 	}
 	defer st.Close()
 
-	h := &api.Handlers{Store: st, MaxOPK: cfg.MaxOPKPerRequest, MaxKeyBytes: cfg.MaxKeyBytes}
+	h := &api.Handlers{
+		Store: st, MaxOPK: cfg.MaxOPKPerRequest, MaxKeyBytes: cfg.MaxKeyBytes,
+		TurnSecret: []byte(cfg.TurnSecret), TurnURIs: cfg.TurnURIs, TurnTTL: cfg.TurnTTL,
+	}
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Router(st, h, cfg.UserHeader, log, cfg.FetchRatePerMin, cfg.FetchBurst),

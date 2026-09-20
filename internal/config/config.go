@@ -4,7 +4,22 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
+
+// splitCSV parses a comma-separated env value into trimmed, non-empty entries.
+func splitCSV(v string) []string {
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // Config is the full runtime configuration, sourced from the environment.
 type Config struct {
@@ -17,6 +32,12 @@ type Config struct {
 	AutoMigrate      bool
 	FetchRatePerMin  int    // per-caller KEY_FETCH budget (fetch consumes a peer's one-time prekey); 0 disables
 	FetchBurst       int    // per-caller burst allowance for KEY_FETCH
+
+	// Ephemeral TURN credentials (coturn use-auth-secret / TURN REST API). TurnSecret MUST equal coturn's
+	// static-auth-secret. Empty TurnSecret disables the /v1/turn/credentials endpoint (503).
+	TurnSecret string
+	TurnURIs   []string // TURN URIs handed to the client, e.g. turn:host:3478?transport=udp
+	TurnTTL    int      // credential lifetime in seconds
 }
 
 func FromEnv() (Config, error) {
@@ -30,6 +51,9 @@ func FromEnv() (Config, error) {
 		AutoMigrate:      getBool("KD_AUTO_MIGRATE", true),
 		FetchRatePerMin:  getInt("KD_FETCH_RATE_PER_MIN", 120),
 		FetchBurst:       getInt("KD_FETCH_BURST", 30),
+		TurnSecret:       os.Getenv("KD_TURN_SECRET"),
+		TurnURIs:         splitCSV(os.Getenv("KD_TURN_URIS")),
+		TurnTTL:          getInt("KD_TURN_TTL_SECONDS", 600),
 	}
 	if !c.DevStub && c.DatabaseURL == "" {
 		return c, fmt.Errorf("KD_DATABASE_URL is required (or set KD_DEV_STUB=true for the in-memory store)")

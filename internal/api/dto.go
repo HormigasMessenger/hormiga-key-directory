@@ -51,3 +51,11 @@ type CountResponse struct {
 	DeviceID                string `json:"deviceId"`
 	OneTimePreKeysRemaining int    `json:"oneTimePreKeysRemaining"`
 }
+
+// TurnCredentialsResponse is short-lived TURN access for the caller (coturn use-auth-secret / TURN REST API).
+type TurnCredentialsResponse struct {
+	Username   string   `json:"username"`   // "<unix_expiry>:<userId>"
+	Credential string   `json:"credential"` // base64(HMAC-SHA1(secret, username))
+	TTL        int      `json:"ttl"`        // seconds
+	URIs       []string `json:"uris"`       // turn:host:3478?transport=udp|tcp
+}
