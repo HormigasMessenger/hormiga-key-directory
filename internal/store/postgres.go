@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -310,4 +311,20 @@ func (p *Postgres) DeleteDevice(ctx context.Context, userID, deviceID string) er
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (p *Postgres) PruneStaleDevices(ctx context.Context, olderThan time.Duration) (int, error) {
+	// Delete a device only if it's stale AND the user has a newer one — so the most-recent device per user
+	// is always kept (keep-newest), and a user never ends up with zero. updated_at is refreshed on every
+	// publish/touch, so live devices survive and abandoned ones age out. FK cascade drops their prekeys.
+	tag, err := p.pool.Exec(ctx,
+		`DELETE FROM e2e_identity e
+		 WHERE e.updated_at < $1
+		   AND EXISTS (SELECT 1 FROM e2e_identity n
+		               WHERE n.user_id = e.user_id AND n.updated_at > e.updated_at)`,
+		time.Now().Add(-olderThan))
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }

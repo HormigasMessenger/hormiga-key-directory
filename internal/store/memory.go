@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Memory is an in-memory directory for dev/e2e only (mirrors the messenger's
@@ -15,7 +16,6 @@ import (
 type Memory struct {
 	mu      sync.Mutex
 	devices map[string]map[string]*memDevice // userID -> deviceID -> device
-	nextSeq int64                            // monotonic publish counter → "latest device" ordering
 }
 
 type memDevice struct {
@@ -23,7 +23,7 @@ type memDevice struct {
 	spk         SignedPreKey
 	hasSPK      bool
 	opks        map[int32][]byte // un-consumed only; consumed ones are removed
-	seq         int64            // publish order; the highest seq for a user is the current device
+	updatedAt   time.Time        // last publish/touch (for the stale-device GC; keep-newest)
 }
 
 func NewMemory() *Memory {
@@ -61,8 +61,7 @@ func (m *Memory) Publish(_ context.Context, userID string, b BundleUpload) error
 	d.identityKey = append([]byte(nil), b.IdentityKey...)
 	d.spk = SignedPreKey{ID: b.SignedPreKey.ID, Pub: append([]byte(nil), b.SignedPreKey.Pub...), Sig: append([]byte(nil), b.SignedPreKey.Sig...)}
 	d.hasSPK = true
-	m.nextSeq++
-	d.seq = m.nextSeq // this (re)publish makes the device the user's current one
+	d.updatedAt = time.Now() // last publish/touch — drives the stale-device GC
 	for _, o := range b.OneTimePreKeys {
 		if _, ok := d.opks[o.ID]; !ok {
 			d.opks[o.ID] = append([]byte(nil), o.Pub...)
@@ -165,6 +164,28 @@ func (m *Memory) DeleteDevice(_ context.Context, userID, deviceID string) error 
 	}
 	delete(byDev, deviceID)
 	return nil
+}
+
+func (m *Memory) PruneStaleDevices(_ context.Context, olderThan time.Duration) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := time.Now().Add(-olderThan)
+	removed := 0
+	for _, byDev := range m.devices {
+		var newest time.Time // keep-newest: never prune a user's most-recent device
+		for _, d := range byDev {
+			if d.updatedAt.After(newest) {
+				newest = d.updatedAt
+			}
+		}
+		for id, d := range byDev {
+			if d.updatedAt.Before(cutoff) && d.updatedAt.Before(newest) {
+				delete(byDev, id)
+				removed++
+			}
+		}
+	}
+	return removed, nil
 }
 
 func lowestKey(pool map[int32][]byte) (int32, bool) {

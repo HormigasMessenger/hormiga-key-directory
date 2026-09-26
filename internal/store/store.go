@@ -9,6 +9,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrNotFound means the requested user (or user+device) has no published bundle.
@@ -48,8 +49,8 @@ type DeviceBundle struct {
 // Store is the directory contract. Implementations: Postgres (prod) and Memory (dev/e2e).
 type Store interface {
 	// Publish registers/updates a device's identity + signed prekey and appends one-time prekeys to its
-	// pool. Bound to userID (the authenticated caller). Single-device (v1): publishing a device RETIRES
-	// the user's other devices.
+	// pool. Bound to userID (the authenticated caller). Multi-device: publishing a device does NOT retire
+	// the user's others — the client encrypts to all of them; stale ones age out via PruneStaleDevices.
 	Publish(ctx context.Context, userID string, b BundleUpload) error
 
 	// AddOneTimePreKeys appends to a device's pool (replenish) and returns the number of un-consumed
@@ -59,8 +60,8 @@ type Store interface {
 	AddOneTimePreKeys(ctx context.Context, userID, deviceID string, opks []PreKey) (remaining int, err error)
 
 	// FetchAndConsume returns the bundles for a peer, consuming one one-time prekey per device atomically.
-	// deviceID == "" fetches the user's CURRENT (single) device. ErrNotFound if the user (or the named
-	// device) has no usable bundle. NOTE: not idempotent — a GET here consumes a prekey; never blind-retry.
+	// deviceID == "" fetches ALL of the user's devices (the client encrypts to each). ErrNotFound if the
+	// user (or named device) has no usable bundle. NOTE: not idempotent — a GET consumes a prekey.
 	FetchAndConsume(ctx context.Context, userID, deviceID string) ([]DeviceBundle, error)
 
 	// CountOneTimePreKeys reports the un-consumed pool size for a device (low-water check). An UNKNOWN
@@ -70,6 +71,12 @@ type Store interface {
 	// DeleteDevice revokes a device: removes its identity + signed/one-time prekeys. Scoped to userID so a
 	// caller only ever deletes its own device. ErrNotFound if the device doesn't exist.
 	DeleteDevice(ctx context.Context, userID, deviceID string) error
+
+	// PruneStaleDevices removes devices not seen (published/touched) within `olderThan`, but NEVER a user's
+	// most-recent device (keep-newest), so every user keeps at least one and stays reachable. This is the
+	// dead-device GC: an abandoned device (e.g. after a reinstall) ages out, while live ones — refreshed by
+	// the client's touch-on-start — stay. Returns the number removed. (FK cascade drops their prekeys.)
+	PruneStaleDevices(ctx context.Context, olderThan time.Duration) (removed int, err error)
 
 	// Ping checks backend liveness.
 	Ping(ctx context.Context) error

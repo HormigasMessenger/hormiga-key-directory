@@ -68,6 +68,28 @@ func main() {
 		}
 	}()
 
+	// Stale-device GC: age out abandoned devices (keep-newest per user) on an interval so the directory
+	// doesn't accumulate dead devices from re-installs. Live devices are kept fresh by the client's
+	// touch-on-start. Disabled when DeviceTTL <= 0.
+	if cfg.DeviceTTL > 0 {
+		go func() {
+			runGC := func() {
+				n, err := st.PruneStaleDevices(context.Background(), cfg.DeviceTTL)
+				if err != nil {
+					log.Warn("device GC failed", "err", err)
+				} else if n > 0 {
+					log.Info("device GC: pruned stale devices", "removed", n, "olderThan", cfg.DeviceTTL.String())
+				}
+			}
+			runGC() // once at startup
+			t := time.NewTicker(cfg.GCInterval)
+			defer t.Stop()
+			for range t.C {
+				runGC()
+			}
+		}()
+	}
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop

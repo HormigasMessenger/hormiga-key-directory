@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // splitCSV parses a comma-separated env value into trimmed, non-empty entries.
@@ -38,6 +39,11 @@ type Config struct {
 	TurnSecret string
 	TurnURIs   []string // TURN URIs handed to the client, e.g. turn:host:3478?transport=udp
 	TurnTTL    int      // credential lifetime in seconds
+
+	// Stale-device GC: remove devices not seen within DeviceTTL (keep-newest per user), every GCInterval.
+	// DeviceTTL <= 0 disables the sweep.
+	DeviceTTL  time.Duration
+	GCInterval time.Duration
 }
 
 func FromEnv() (Config, error) {
@@ -54,6 +60,8 @@ func FromEnv() (Config, error) {
 		TurnSecret:       os.Getenv("KD_TURN_SECRET"),
 		TurnURIs:         splitCSV(os.Getenv("KD_TURN_URIS")),
 		TurnTTL:          getInt("KD_TURN_TTL_SECONDS", 600),
+		DeviceTTL:        time.Duration(getInt("KD_DEVICE_TTL_DAYS", 30)) * 24 * time.Hour,
+		GCInterval:       time.Duration(getInt("KD_GC_INTERVAL_HOURS", 24)) * time.Hour,
 	}
 	if !c.DevStub && c.DatabaseURL == "" {
 		return c, fmt.Errorf("KD_DATABASE_URL is required (or set KD_DEV_STUB=true for the in-memory store)")
