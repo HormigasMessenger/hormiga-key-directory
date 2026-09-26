@@ -51,7 +51,12 @@ All `/v1` routes require the injected identity header.
 | `GET`  | `/v1/keys/self/count?deviceId=…` | caller's remaining OPKs (low-water check) |
 | `GET`  | `/v1/keys/{userId}` | **KEY_FETCH** — bundles for every device of a peer (consumes one OPK/device) |
 | `GET`  | `/v1/keys/{userId}/{deviceId}` | **KEY_FETCH** — one device's bundle |
+| `DELETE` | `/v1/keys/self/{deviceId}` | retire one of the caller's own devices |
+| `GET`  | `/v1/turn/credentials` | ephemeral TURN credentials (503 when `KD_TURN_SECRET` unset) |
 | `GET`  | `/healthz`, `/readyz` | liveness / readiness (unauthenticated) |
+
+`KEY_FETCH` is per-caller rate-limited (`KD_FETCH_RATE_PER_MIN` / `KD_FETCH_BURST`,
+`429` on exceed) since each fetch consumes a peer's one-time prekey.
 
 Public keys are base64 (std). Fetch returns `oneTimePreKey: null` when the pool is
 exhausted (X3DH falls back to SPK-only, ADR-023 §D5); `oneTimePreKeysRemaining` drives
@@ -80,6 +85,22 @@ POST /v1/keys      (X-User-Id: alice)
 | `KD_MAX_OPK_PER_REQUEST` | `200` | cap on OPKs per publish/replenish |
 | `KD_MAX_KEY_BYTES` | `1024` | per-key size sanity cap |
 | `KD_AUTO_MIGRATE` | `true` | run embedded migrations at startup |
+| `KD_FETCH_RATE_PER_MIN` | `120` | per-caller KEY_FETCH budget (`0` disables) |
+| `KD_FETCH_BURST` | `30` | per-caller KEY_FETCH burst allowance |
+| `KD_TURN_SECRET` | — | must equal coturn's `static-auth-secret`; empty ⇒ TURN endpoint returns `503` |
+| `KD_TURN_URIS` | — | CSV of TURN URIs handed to the client (e.g. `turn:host:3478?transport=udp`) |
+| `KD_TURN_TTL_SECONDS` | `600` | ephemeral TURN credential lifetime |
+| `KD_DEVICE_TTL_DAYS` | `30` | stale-device GC threshold; `0` disables the sweep |
+| `KD_GC_INTERVAL_HOURS` | `24` | how often the stale-device GC runs |
+
+### Multi-device & the stale-device GC
+
+Fetch serves **all** of a peer's devices and the client encrypts to each — publishing a
+new device never retires the others. To keep the directory from accumulating dead
+identities (e.g. after a re-install), a background GC prunes a device only when it is older
+than `KD_DEVICE_TTL_DAYS` **and** the same user has a newer sibling device
+(*keep-newest*). A user's single dormant device is always kept, so nobody becomes
+unreachable. Live devices stay fresh via the client's touch-on-start.
 
 ## Run
 
