@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"sort"
 	"sync"
 )
 
@@ -67,12 +68,7 @@ func (m *Memory) Publish(_ context.Context, userID string, b BundleUpload) error
 			d.opks[o.ID] = append([]byte(nil), o.Pub...)
 		}
 	}
-	// Single-device model (v1): publishing one device retires the user's others (mirrors Postgres).
-	for id := range m.devices[userID] {
-		if id != b.DeviceID {
-			delete(m.devices[userID], id)
-		}
-	}
+	// Multi-device: publishing a device does NOT retire the user's others — the client encrypts to all.
 	return nil
 }
 
@@ -111,19 +107,11 @@ func (m *Memory) FetchAndConsume(_ context.Context, userID, deviceID string) ([]
 	}
 	var deviceIDs []string
 	if deviceID == "" {
-		// v1 single-device: serve only the latest-published device (highest seq). Mirrors the
-		// Postgres store — a peer must not receive dead devices left by past re-provisions, or
-		// the safety number is computed against a stale identity and never matches.
-		var latest string
-		var maxSeq int64 = -1
-		for id, d := range byDev {
-			if d.seq > maxSeq {
-				maxSeq, latest = d.seq, id
-			}
+		// Serve ALL of the user's devices (multi-device delivery) — the client encrypts to each.
+		for id := range byDev {
+			deviceIDs = append(deviceIDs, id)
 		}
-		if latest != "" {
-			deviceIDs = []string{latest}
-		}
+		sort.Strings(deviceIDs)
 	} else {
 		if _, ok := byDev[deviceID]; !ok {
 			return nil, ErrNotFound

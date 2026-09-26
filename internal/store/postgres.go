@@ -80,17 +80,11 @@ func (p *Postgres) Publish(ctx context.Context, userID string, b BundleUpload) e
 	if err := insertOPKs(ctx, tx, userID, b.DeviceID, b.OneTimePreKeys); err != nil {
 		return err
 	}
-
-	// Single-device model (v1): a user has exactly ONE live device — publishing one RETIRES any others.
-	// A re-provision (cleared storage / a different device) would otherwise leave dead rows that the
-	// directory keeps serving, and a peer verifying the safety number could hash the wrong (stale) key.
-	// Retire them here so the invariant "one device per user" holds at the source of truth (the FK
-	// cascade drops the retired devices' signed/one-time prekeys). The just-published device is kept.
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM e2e_identity WHERE user_id = $1 AND device_id <> $2`,
-		userID, b.DeviceID); err != nil {
-		return fmt.Errorf("retire other devices: %w", err)
-	}
+	// NOTE: publishing a device must NOT delete the user's OTHER devices. A user may legitimately run
+	// several (two browsers / phone + laptop); the client encrypts to ALL of them and each must keep
+	// receiving decryptable copies. (Retiring others here broke multi-device delivery — a peer's message
+	// went to only the last-published device while they read on another. Dead-device cleanup, if wanted,
+	// belongs in a TTL/last-seen GC, not on publish.)
 	return tx.Commit(ctx)
 }
 
@@ -187,17 +181,11 @@ func (p *Postgres) FetchAndConsume(ctx context.Context, userID, deviceID string)
 	// Which devices to serve.
 	var rows pgx.Rows
 	if deviceID == "" {
-		// v1 is single-device: a user's current device is the most-recently-published one.
-		// Re-provisioning (cleared storage / new browser) publishes a NEW device_id without
-		// retiring the old rows, so without this the directory would hand a peer EVERY dead
-		// device it ever saw. A peer can't tell which is live, and the safety number — hashed
-		// per identity key — would then be computed against a stale device and never match.
-		// Serve only the latest identity so both sides converge on the user's current key.
+		// Serve ALL of the user's devices — a user may run several, and the client encrypts to each so
+		// every device gets a decryptable copy (multi-device delivery). (Do NOT serve only the latest:
+		// that dropped messages for a peer reading on a different device.)
 		rows, err = tx.Query(ctx,
-			`SELECT device_id, identity_key_pub FROM e2e_identity
-			 WHERE user_id = $1
-			 ORDER BY updated_at DESC, device_id DESC
-			 LIMIT 1`,
+			`SELECT device_id, identity_key_pub FROM e2e_identity WHERE user_id = $1 ORDER BY device_id`,
 			userID)
 	} else {
 		rows, err = tx.Query(ctx,
